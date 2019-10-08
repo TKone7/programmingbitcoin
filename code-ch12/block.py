@@ -10,13 +10,15 @@ from helper import (
 )
 
 
-GENESIS_BLOCK_HASH = bytes.fromhex('000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f')
-TESTNET_GENESIS_BLOCK_HASH = bytes.fromhex('000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943')
+GENESIS_BLOCK = bytes.fromhex('0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c')
+TESTNET_GENESIS_BLOCK = bytes.fromhex('0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff001d1aa4ae18')
+LOWEST_BITS = bytes.fromhex('ffff001d')
 
 
 class Block:
 
-    def __init__(self, version, prev_block, merkle_root, timestamp, bits, nonce, tx_hashes=None):
+    def __init__(self, version, prev_block, merkle_root,
+                 timestamp, bits, nonce, tx_hashes=None):
         self.version = version
         self.prev_block = prev_block
         self.merkle_root = merkle_root
@@ -65,9 +67,9 @@ class Block:
         # serialize
         s = self.serialize()
         # hash256
-        sha = hash256(s)
+        h256 = hash256(s)
         # reverse
-        return sha[::-1]
+        return h256[::-1]
 
     def bip9(self):
         '''Returns whether this block is signaling readiness for BIP9'''
@@ -102,9 +104,9 @@ class Block:
     def check_pow(self):
         '''Returns whether this block satisfies proof of work'''
         # get the hash256 of the serialization of this block
-        sha = hash256(self.serialize())
+        h256 = hash256(self.serialize())
         # interpret this hash as a little-endian number
-        proof = little_endian_to_int(sha)
+        proof = little_endian_to_int(h256)
         # return whether this integer is less than the target
         return proof < self.target()
 
@@ -112,14 +114,12 @@ class Block:
         '''Gets the merkle root of the tx_hashes and checks that it's
         the same as the merkle root of this block.
         '''
-        # reverse all the transaction hashes (self.tx_hashes)
+        # reverse each item in self.tx_hashes
         hashes = [h[::-1] for h in self.tx_hashes]
-        # get the Merkle Root
-        root = merkle_root(hashes)
-        # reverse the Merkle Root
-        # return whether self.merkle root is the same as
-        # the reverse of the calculated merkle root
-        return root[::-1] == self.merkle_root
+        # compute the Merkle Root and reverse
+        root = merkle_root(hashes)[::-1]
+        # return whether self.merkle_root is the same
+        return root == self.merkle_root
 
 
 class BlockTest(TestCase):

@@ -66,6 +66,7 @@ class NetworkEnvelope:
         calculated_checksum = hash256(payload)[:4]
         if calculated_checksum != checksum:
             raise RuntimeError('checksum does not match')
+        # return an instance of the class
         return cls(command, payload, testnet=testnet)
 
     def serialize(self):
@@ -121,8 +122,8 @@ class VersionMessage:
                  receiver_ip=b'\x00\x00\x00\x00', receiver_port=8333,
                  sender_services=0,
                  sender_ip=b'\x00\x00\x00\x00', sender_port=8333,
-                 nonce=None, user_agent=b'/programmingblockchain:0.1/',
-                 latest_block=0, relay=True):
+                 nonce=None, user_agent=b'/programmingbitcoin:0.1/',
+                 latest_block=0, relay=False):
         self.version = version
         self.services = services
         if timestamp is None:
@@ -155,14 +156,14 @@ class VersionMessage:
         result += int_to_little_endian(self.receiver_services, 8)
         # IPV4 is 10 00 bytes and 2 ff bytes then receiver ip
         result += b'\x00' * 10 + b'\xff\xff' + self.receiver_ip
-        # receiver port is 2 bytes, little endian should be 0
-        result += int_to_little_endian(self.receiver_port, 2)
+        # receiver port is 2 bytes, big endian
+        result += self.receiver_port.to_bytes(2, 'big')
         # sender services is 8 bytes little endian
         result += int_to_little_endian(self.sender_services, 8)
         # IPV4 is 10 00 bytes and 2 ff bytes then sender ip
         result += b'\x00' * 10 + b'\xff\xff' + self.sender_ip
-        # sender port is 2 bytes, little endian should be 0
-        result += int_to_little_endian(self.sender_port, 2)
+        # sender port is 2 bytes, big endian
+        result += self.sender_port.to_bytes(2, 'big')
         # nonce should be 8 bytes
         result += self.nonce
         # useragent is a variable string, so varint first
@@ -182,7 +183,50 @@ class VersionMessageTest(TestCase):
 
     def test_serialize(self):
         v = VersionMessage(timestamp=0, nonce=b'\x00' * 8)
-        self.assertEqual(v.serialize().hex(), '7f11010000000000000000000000000000000000000000000000000000000000000000000000ffff000000008d20000000000000000000000000000000000000ffff000000008d2000000000000000001b2f70726f6772616d6d696e67626c6f636b636861696e3a302e312f0000000001')
+        self.assertEqual(v.serialize().hex(), '7f11010000000000000000000000000000000000000000000000000000000000000000000000ffff00000000208d000000000000000000000000000000000000ffff00000000208d0000000000000000182f70726f6772616d6d696e67626974636f696e3a302e312f0000000000')
+
+
+class VerAckMessage:
+    command = b'verack'
+
+    def __init__(self):
+        pass
+
+    @classmethod
+    def parse(cls, s):
+        return cls()
+
+    def serialize(self):
+        return b''
+
+
+class PingMessage:
+    command = b'ping'
+
+    def __init__(self, nonce):
+        self.nonce = nonce
+
+    @classmethod
+    def parse(cls, s):
+        nonce = s.read(8)
+        return cls(nonce)
+
+    def serialize(self):
+        return self.nonce
+
+
+class PongMessage:
+    command = b'pong'
+
+    def __init__(self, nonce):
+        self.nonce = nonce
+
+    def parse(cls, s):
+        nonce = s.read(8)
+        return cls(nonce)
+
+    def serialize(self):
+        return self.nonce
 
 
 class GetHeadersMessage:
@@ -268,10 +312,11 @@ class GetDataMessage:
     def serialize(self):
         # start with the number of items as a varint
         result = encode_varint(len(self.data))
+        # loop through each tuple (data_type, identifier) in self.data
         for data_type, identifier in self.data:
-            # data type is 4 bytes little endian
+            # data type is 4 bytes Little-Endian
             result += int_to_little_endian(data_type, 4)
-            # identifier needs to be in little endian
+            # identifier needs to be in Little-Endian
             result += identifier[::-1]
         return result
 
@@ -286,6 +331,15 @@ class GetDataMessageTest(TestCase):
         block2 = bytes.fromhex('00000000000000beb88910c46f6b442312361c6693a7fb52065b583979844910')
         get_data.add_data(FILTERED_BLOCK_DATA_TYPE, block2)
         self.assertEqual(get_data.serialize().hex(), hex_msg)
+
+
+class GenericMessage:
+    def __init__(self, command, payload):
+        self.command = command
+        self.payload = payload
+
+    def serialize(self):
+        return self.payload
 
 
 class SimpleNode:
@@ -305,18 +359,20 @@ class SimpleNode:
         self.stream = self.socket.makefile('rb', None)
 
     def handshake(self):
-        '''Do a handshake with the other node. Handshake is sending a version message and getting a verack back.'''
+        '''Do a handshake with the other node.
+        Handshake is sending a version message and getting a verack back.'''
         # create a version message
         version = VersionMessage()
         # send the command
-        self.send(version.command, version.serialize())
+        self.send(version)
         # wait for a verack message
-        self.wait_for_commands({b'verack'})
+        self.wait_for(VerAckMessage)
 
-    def send(self, command, payload):
+    def send(self, message):
         '''Send a message to the connected node'''
         # create a network envelope
-        envelope = NetworkEnvelope(command, payload, testnet=self.testnet)
+        envelope = NetworkEnvelope(
+            message.command, message.serialize(), testnet=self.testnet)
         if self.logging:
             print('sending: {}'.format(envelope))
         # send the serialized envelope over the socket using sendall
@@ -329,29 +385,30 @@ class SimpleNode:
             print('receiving: {}'.format(envelope))
         return envelope
 
-    def wait_for_commands(self, commands):
-        '''Wait for one of the commands in the list'''
+    def wait_for(self, *message_classes):
+        '''Wait for one of the messages in the list'''
         # initialize the command we have, which should be None
         command = None
+        command_to_class = {m.command: m for m in message_classes}
         # loop until the command is in the commands we want
-        while command not in commands:
+        while command not in command_to_class.keys():
             # get the next network message
             envelope = self.read()
             # set the command to be evaluated
             command = envelope.command
             # we know how to respond to version and ping, handle that here
-            if command == b'version':
+            if command == VersionMessage.command:
                 # send verack
-                self.send(b'verack', b'')
-            elif command == b'ping':
+                self.send(VerAckMessage())
+            elif command == PingMessage.command:
                 # send pong
-                self.send(b'pong', envelope.payload)
-        # return the last envelope we got
-        return envelope
+                self.send(PongMessage(envelope.payload))
+        # return the envelope parsed as a member of the right message class
+        return command_to_class[command].parse(envelope.stream())
 
 
 class SimpleNodeTest(TestCase):
 
     def test_handshake(self):
-        node = SimpleNode('tbtc.programmingblockchain.com', testnet=True)
+        node = SimpleNode('testnet.programmingbitcoin.com', testnet=True)
         node.handshake()

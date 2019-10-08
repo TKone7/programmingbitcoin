@@ -6,7 +6,6 @@ import requests
 
 from ecc import PrivateKey
 from helper import (
-    decode_base58,
     encode_varint,
     hash256,
     int_to_little_endian,
@@ -23,14 +22,14 @@ class TxFetcher:
     @classmethod
     def get_url(cls, testnet=False):
         if testnet:
-            return 'http://tbtc.programmingblockchain.com:18332'
+            return 'http://testnet.programmingbitcoin.com'
         else:
-            return 'http://btc.programmingblockchain.com:8332'
+            return 'http://mainnet.programmingbitcoin.com'
 
     @classmethod
     def fetch(cls, tx_id, testnet=False, fresh=False):
         if fresh or (tx_id not in cls.cache):
-            url = '{}/rest/tx/{}.hex'.format(cls.get_url(testnet), tx_id)
+            url = '{}/tx/{}.hex'.format(cls.get_url(testnet), tx_id)
             response = requests.get(url)
             try:
                 raw = bytes.fromhex(response.text.strip())
@@ -52,14 +51,7 @@ class TxFetcher:
     def load_cache(cls, filename):
         disk_cache = json.loads(open(filename, 'r').read())
         for k, raw_hex in disk_cache.items():
-            raw = bytes.fromhex(raw_hex)
-            if raw[4] == 0:
-                raw = raw[:4] + raw[6:]
-                tx = Tx.parse(BytesIO(raw))
-                tx.locktime = little_endian_to_int(raw[-4:])
-            else:
-                tx = Tx.parse(BytesIO(raw))
-            cls.cache[k] = tx
+            cls.cache[k] = Tx.parse(BytesIO(bytes.fromhex(raw_hex)))
 
     @classmethod
     def dump_cache(cls, filename):
@@ -69,9 +61,12 @@ class TxFetcher:
             f.write(s)
 
 
+# tag::source1[]
 class Tx:
+    command = b'tx'
 
-    def __init__(self, version, tx_ins, tx_outs, locktime, testnet=False, segwit=False):
+    def __init__(self, version, tx_ins, tx_outs, 
+        locktime, testnet=False, segwit=False):
         self.version = version
         self.tx_ins = tx_ins
         self.tx_outs = tx_outs
@@ -81,6 +76,7 @@ class Tx:
         self._hash_prevouts = None
         self._hash_sequence = None
         self._hash_outputs = None
+    # end::source1[]
 
     def __repr__(self):
         tx_ins = ''
@@ -89,7 +85,7 @@ class Tx:
         tx_outs = ''
         for tx_out in self.tx_outs:
             tx_outs += tx_out.__repr__() + '\n'
-        return 'tx: {}\nversion: {}\ntx_ins:\n{}\ntx_outs:\n{}\nlocktime: {}\n'.format(
+        return 'tx: {}\nversion: {}\ntx_ins:\n{}tx_outs:\n{}locktime: {}'.format(
             self.id(),
             self.version,
             tx_ins,
@@ -101,71 +97,55 @@ class Tx:
         '''Human-readable hexadecimal of the transaction hash'''
         return self.hash().hex()
 
+    # tag::source5[]
     def hash(self):
         '''Binary hash of the legacy serialization'''
         return hash256(self.serialize_legacy())[::-1]
+    # end::source5[]
 
+    # tag::source2[]
     @classmethod
     def parse(cls, s, testnet=False):
-        '''Parses a transaction from stream'''
-        # we can determine whether something is segwit or legacy by looking
-        # at byte 5
-        s.read(4)
-        if s.read(1) == b'\x00':
+        s.read(4)  # <1>
+        if s.read(1) == b'\x00':  # <2>
             parse_method = cls.parse_segwit
         else:
             parse_method = cls.parse_legacy
-        # reset the seek to the beginning so everything can go through
-        s.seek(-5, 1)
+        s.seek(-5, 1)  # <3>
         return parse_method(s, testnet=testnet)
 
     @classmethod
     def parse_legacy(cls, s, testnet=False):
-        '''Takes a byte stream and parses a legacy transaction'''
-        # s.read(n) will return n bytes
-        # version has 4 bytes, little-endian, interpret as int
-        version = little_endian_to_int(s.read(4))
-        # num_inputs is a varint, use read_varint(s)
+        version = little_endian_to_int(s.read(4))   # <4>
         num_inputs = read_varint(s)
-        # each input needs parsing
         inputs = []
         for _ in range(num_inputs):
             inputs.append(TxIn.parse(s))
-        # num_outputs is a varint, use read_varint(s)
         num_outputs = read_varint(s)
-        # each output needs parsing
         outputs = []
         for _ in range(num_outputs):
             outputs.append(TxOut.parse(s))
-        # locktime is 4 bytes, little-endian
         locktime = little_endian_to_int(s.read(4))
-        # return an instance of the class (cls(...))
-        return cls(version, inputs, outputs, locktime, testnet=testnet, segwit=False)
+        return cls(version, inputs, outputs, locktime, 
+                   testnet=testnet, segwit=False)
+    # end::source2[]
 
+    # tag::source3[]
     @classmethod
     def parse_segwit(cls, s, testnet=False):
-        '''Takes a byte stream and parses a segwit transaction'''
-        # s.read(n) will return n bytes
-        # version has 4 bytes, little-endian, interpret as int
         version = little_endian_to_int(s.read(4))
-        # next two bytes need to be 0x00 and 0x01
         marker = s.read(2)
-        if marker != b'\x00\x01':
+        if marker != b'\x00\x01':  # <1>
             raise RuntimeError('Not a segwit transaction {}'.format(marker))
-        # num_inputs is a varint, use read_varint(s)
         num_inputs = read_varint(s)
-        # each input needs parsing
         inputs = []
         for _ in range(num_inputs):
             inputs.append(TxIn.parse(s))
-        # num_outputs is a varint, use read_varint(s)
         num_outputs = read_varint(s)
-        # each output needs parsing
         outputs = []
         for _ in range(num_outputs):
             outputs.append(TxOut.parse(s))
-        # now parse the witness program
-        for tx_in in inputs:
+        for tx_in in inputs:  # <2>
             num_items = read_varint(s)
             items = []
             for _ in range(num_items):
@@ -175,115 +155,102 @@ class Tx:
                 else:
                     items.append(s.read(item_len))
             tx_in.witness = items
-        # locktime is 4 bytes, little-endian
         locktime = little_endian_to_int(s.read(4))
-        # return an instance of the class (cls(...))
-        return cls(version, inputs, outputs, locktime, testnet=testnet, segwit=True)
+        return cls(version, inputs, outputs, locktime, 
+                   testnet=testnet, segwit=True)
+    # end::source3[]
 
+    # tag::source4[]
     def serialize(self):
         if self.segwit:
             return self.serialize_segwit()
         else:
             return self.serialize_legacy()
 
-    def serialize_legacy(self):
-        '''Returns the byte serialization of the transaction'''
-        # serialize version (4 bytes, little endian)
+    def serialize_legacy(self):  # <1>
         result = int_to_little_endian(self.version, 4)
-        # encode_varint on the number of inputs
         result += encode_varint(len(self.tx_ins))
-        # iterate inputs
         for tx_in in self.tx_ins:
-            # serialize each input
             result += tx_in.serialize()
-        # encode_varint on the number of outputs
         result += encode_varint(len(self.tx_outs))
-        # iterate outputs
         for tx_out in self.tx_outs:
-            # serialize each output
             result += tx_out.serialize()
-        # serialize locktime (4 bytes, little endian)
         result += int_to_little_endian(self.locktime, 4)
         return result
 
     def serialize_segwit(self):
-        '''Returns the byte serialization of the transaction'''
-        # serialize version (4 bytes, little endian)
         result = int_to_little_endian(self.version, 4)
-        # segwit marker '0001'
-        result += b'\x00\x01'
-        # encode_varint on the number of inputs
+        result += b'\x00\x01'  # <2>
         result += encode_varint(len(self.tx_ins))
-        # iterate inputs
         for tx_in in self.tx_ins:
-            # serialize each input
             result += tx_in.serialize()
-        # encode_varint on the number of inputs
         result += encode_varint(len(self.tx_outs))
-        # iterate outputs
         for tx_out in self.tx_outs:
-            # serialize each output
             result += tx_out.serialize()
-        # add the witness data
-        for tx_in in self.tx_ins:
+        for tx_in in self.tx_ins:  # <3>
             result += int_to_little_endian(len(tx_in.witness), 1)
             for item in tx_in.witness:
                 if type(item) == int:
                     result += int_to_little_endian(item, 1)
                 else:
                     result += encode_varint(len(item)) + item
-        # serialize locktime (4 bytes, little endian)
         result += int_to_little_endian(self.locktime, 4)
         return result
+    # end::source4[]
 
     def fee(self):
         '''Returns the fee of this transaction in satoshi'''
         # initialize input sum and output sum
         input_sum, output_sum = 0, 0
-        # iterate through inputs
+        # use TxIn.value() to sum up the input amounts
         for tx_in in self.tx_ins:
-            # for each input get the value and add to input sum
             input_sum += tx_in.value(self.testnet)
-        # iterate through outputs
+        # use TxOut.amount to sum up the output amounts
         for tx_out in self.tx_outs:
-            # for each output get the amount and add to output sum
             output_sum += tx_out.amount
-        # return input sum - output sum
+        # fee is input sum - output sum
         return input_sum - output_sum
 
     def sig_hash(self, input_index, redeem_script=None):
         '''Returns the integer representation of the hash that needs to get
         signed for index input_index'''
-        # create a new set of tx_ins (alt_tx_ins)
-        alt_tx_ins = []
-        # iterate over self.tx_ins
-        for tx_in in self.tx_ins:
-            # create a new TxIn that has no script_sig and add to alt_tx_ins
-            alt_tx_ins.append(TxIn(
+        # start the serialization with version
+        # use int_to_little_endian in 4 bytes
+        s = int_to_little_endian(self.version, 4)
+        # add how many inputs there are using encode_varint
+        s += encode_varint(len(self.tx_ins))
+        # loop through each input using enumerate, so we have the input index
+        for i, tx_in in enumerate(self.tx_ins):
+            # if the input index is the one we're signing
+            if i == input_index:
+                # if the RedeemScript was passed in, that's the ScriptSig
+                if redeem_script:
+                    script_sig = redeem_script
+                # otherwise the previous tx's ScriptPubkey is the ScriptSig
+                else:
+                    script_sig = tx_in.script_pubkey(self.testnet)
+            # Otherwise, the ScriptSig is empty
+            else:
+                script_sig = None
+            # add the serialization of the input with the ScriptSig we want
+            s += TxIn(
                 prev_tx=tx_in.prev_tx,
                 prev_index=tx_in.prev_index,
+                script_sig=script_sig,
                 sequence=tx_in.sequence,
-            ))
-        # grab the input at the input_index
-        signing_input = alt_tx_ins[input_index]
-        # p2sh would require a redeem_script
-        if redeem_script:
-            # p2sh replaces the script_sig with the redeem_script
-            signing_input.script_sig = redeem_script
-        else:
-            # the script_sig of the signing_input should be script_pubkey
-            signing_input.script_sig = signing_input.script_pubkey(self.testnet)
-        # create an alternate transaction with the modified tx_ins
-        alt_tx = self.__class__(
-            version=self.version,
-            tx_ins=alt_tx_ins,
-            tx_outs=self.tx_outs,
-            locktime=self.locktime)
-        # add the SIGHASH_ALL int 4 bytes, little endian
-        result = alt_tx.serialize() + int_to_little_endian(SIGHASH_ALL, 4)
-        # get the hash256 of the tx serialization
-        h256 = hash256(result)
-        # convert this to a big-endian integer using int.from_bytes(x, 'big')
+            ).serialize()
+        # add how many outputs there are using encode_varint
+        s += encode_varint(len(self.tx_outs))
+        # add the serialization of each output
+        for tx_out in self.tx_outs:
+            s += tx_out.serialize()
+        # add the locktime using int_to_little_endian in 4 bytes
+        s += int_to_little_endian(self.locktime, 4)
+        # add SIGHASH_ALL using int_to_little_endian in 4 bytes
+        s += int_to_little_endian(SIGHASH_ALL, 4)
+        # hash256 the serialization
+        h256 = hash256(s)
+        # convert the result to an integer using int.from_bytes(x, 'big')
         return int.from_bytes(h256, 'big')
 
     def hash_prevouts(self):
@@ -321,9 +288,9 @@ class Tx:
         if witness_script:
             script_code = witness_script.serialize()
         elif redeem_script:
-            script_code = p2pkh_script(redeem_script.instructions[1]).serialize()
+            script_code = p2pkh_script(redeem_script.cmds[1]).serialize()
         else:
-            script_code = p2pkh_script(tx_in.script_pubkey(self.testnet).instructions[1]).serialize()
+            script_code = p2pkh_script(tx_in.script_pubkey(self.testnet).cmds[1]).serialize()
         s += script_code
         s += int_to_little_endian(tx_in.value(), 8)
         s += int_to_little_endian(tx_in.sequence, 4)
@@ -340,18 +307,18 @@ class Tx:
         script_pubkey = tx_in.script_pubkey(testnet=self.testnet)
         # check to see if the ScriptPubkey is a p2sh
         if script_pubkey.is_p2sh_script_pubkey():
-            # the last instruction has to be the RedeemScript to trigger
-            instruction = tx_in.script_sig.instructions[-1]
+            # the last cmd has to be the RedeemScript to trigger
+            cmd = tx_in.script_sig.cmds[-1]
             # parse the RedeemScript
-            raw_redeem = int_to_little_endian(len(instruction), 1) + instruction
+            raw_redeem = int_to_little_endian(len(cmd), 1) + cmd
             redeem_script = Script.parse(BytesIO(raw_redeem))
             # the RedeemScript might be p2wpkh or p2wsh
             if redeem_script.is_p2wpkh_script_pubkey():
                 z = self.sig_hash_bip143(input_index, redeem_script)
                 witness = tx_in.witness
             elif redeem_script.is_p2wsh_script_pubkey():
-                instruction = tx_in.witness[-1]
-                raw_witness = encode_varint(len(instruction)) + instruction
+                cmd = tx_in.witness[-1]
+                raw_witness = encode_varint(len(cmd)) + cmd
                 witness_script = Script.parse(BytesIO(raw_witness))
                 z = self.sig_hash_bip143(input_index, witness_script=witness_script)
                 witness = tx_in.witness
@@ -364,8 +331,8 @@ class Tx:
                 z = self.sig_hash_bip143(input_index)
                 witness = tx_in.witness
             elif script_pubkey.is_p2wsh_script_pubkey():
-                instruction = tx_in.witness[-1]
-                raw_witness = encode_varint(len(instruction)) + instruction
+                cmd = tx_in.witness[-1]
+                raw_witness = encode_varint(len(cmd)) + cmd
                 witness_script = Script.parse(BytesIO(raw_witness))
                 z = self.sig_hash_bip143(input_index, witness_script=witness_script)
                 witness = tx_in.witness
@@ -382,7 +349,7 @@ class Tx:
         # check that we're not creating money
         if self.fee() < 0:
             return False
-        # check that each input has a correct ScriptSig
+        # check that each input has a valid ScriptSig
         for i in range(len(self.tx_ins)):
             if not self.verify_input(i):
                 return False
@@ -390,7 +357,7 @@ class Tx:
 
     def sign_input(self, input_index, private_key):
         '''Signs the input using the private key'''
-        # get the sig_hash (z)
+        # get the signature hash (z)
         z = self.sig_hash(input_index)
         # get der signature of z from private key
         der = private_key.sign(z).der()
@@ -398,7 +365,7 @@ class Tx:
         sig = der + SIGHASH_ALL.to_bytes(1, 'big')
         # calculate the sec
         sec = private_key.point.sec()
-        # initialize a new script with [sig, sec] as the instructions
+        # initialize a new script with [sig, sec] as the cmds
         script_sig = Script([sig, sec])
         # change input's script_sig to new script
         self.tx_ins[input_index].script_sig = script_sig
@@ -427,10 +394,10 @@ class Tx:
         # if this is NOT a coinbase transaction, return None
         if not self.is_coinbase():
             return None
-        # grab the first instruction
-        first_instruction = self.tx_ins[0].script_sig.instructions[0]
-        # convert the instruction from little endian to int
-        return little_endian_to_int(first_instruction)
+        # grab the first cmd
+        first_cmd = self.tx_ins[0].script_sig.cmds[0]
+        # convert the cmd from little endian to int
+        return little_endian_to_int(first_cmd)
 
 
 class TxIn:
@@ -455,17 +422,15 @@ class TxIn:
         '''Takes a byte stream and parses the tx_input at the start
         return a TxIn object
         '''
-        # s.read(n) will return n bytes
         # prev_tx is 32 bytes, little endian
         prev_tx = s.read(32)[::-1]
-        # prev_index is 4 bytes, little endian, interpret as int
+        # prev_index is an integer in 4 bytes, little endian
         prev_index = little_endian_to_int(s.read(4))
-        # script_sig is a variable field (length followed by the data)
-        # you can use Script.parse to get the actual script
+        # use Script.parse to get the ScriptSig
         script_sig = Script.parse(s)
-        # sequence is 4 bytes, little-endian, interpret as int
+        # sequence is an integer in 4 bytes, little-endian
         sequence = little_endian_to_int(s.read(4))
-        # return an instance of the class (cls(...))
+        # return an instance of the class (see __init__ for args)
         return cls(prev_tx, prev_index, script_sig, sequence)
 
     def serialize(self):
@@ -494,7 +459,7 @@ class TxIn:
         return tx.tx_outs[self.prev_index].amount
 
     def script_pubkey(self, testnet=False):
-        '''Get the scriptPubKey by looking up the tx hash
+        '''Get the ScriptPubKey by looking up the tx hash
         Returns a Script object
         '''
         # use self.fetch_tx to get the transaction
@@ -518,13 +483,11 @@ class TxOut:
         '''Takes a byte stream and parses the tx_output at the start
         return a TxOut object
         '''
-        # s.read(n) will return n bytes
-        # amount is 8 bytes, little endian, interpret as int
+        # amount is an integer in 8 bytes, little endian
         amount = little_endian_to_int(s.read(8))
-        # script_pubkey is a variable field (length followed by the data)
-        # you can use Script.parse to get the actual script
+        # use Script.parse to get the ScriptPubKey
         script_pubkey = Script.parse(s)
-        # return an instance of the class (cls(...))
+        # return an instance of the class (see __init__ for args)
         return cls(amount, script_pubkey)
 
     def serialize(self):

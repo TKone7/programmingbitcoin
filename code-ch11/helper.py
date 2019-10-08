@@ -6,7 +6,7 @@ import hashlib
 SIGHASH_ALL = 1
 SIGHASH_NONE = 2
 SIGHASH_SINGLE = 3
-BASE58_ALPHABET = b'123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
 TWO_WEEKS = 60 * 60 * 24 * 14
 MAX_TARGET = 0xffff * 256**(0x1d - 3)
 
@@ -35,29 +35,29 @@ def encode_base58(s):
             count += 1
         else:
             break
-    prefix = b'1' * count
-    # convert from binary to hex, then hex to integer
-    num = int(s.hex(), 16)
-    result = bytearray()
+    # convert to big endian integer
+    num = int.from_bytes(s, 'big')
+    prefix = '1' * count
+    result = ''
     while num > 0:
         num, mod = divmod(num, 58)
-        result.insert(0, BASE58_ALPHABET[mod])
-    return prefix + bytes(result)
+        result = BASE58_ALPHABET[mod] + result
+    return prefix + result
 
 
 def encode_base58_checksum(s):
-    return encode_base58(s + hash256(s)[:4]).decode('ascii')
+    return encode_base58(s + hash256(s)[:4])
 
 
 def decode_base58(s):
     num = 0
-    for c in s.encode('ascii'):
+    for c in s:
         num *= 58
         num += BASE58_ALPHABET.index(c)
     combined = num.to_bytes(25, byteorder='big')
     checksum = combined[-4:]
     if hash256(combined[:-4])[:4] != checksum:
-        raise ValueError('bad address: {} {}'.format(checksum, hash256(combined)[:4]))
+        raise ValueError('bad address: {} {}'.format(checksum, hash256(combined[:-4])[:4]))
     return combined[1:-4]
 
 
@@ -150,38 +150,56 @@ def target_to_bits(target):
         exponent = len(raw_bytes)
         # coefficient is the first 3 digits of the base-256 number
         coefficient = raw_bytes[:3]
-    new_bits_big_endian = bytes([exponent]) + coefficient
     # we've truncated the number after the first 3 digits of base-256
-    return new_bits_big_endian[::-1]
+    new_bits = coefficient[::-1] + bytes([exponent])
+    return new_bits
 
 
 def calculate_new_bits(previous_bits, time_differential):
     '''Calculates the new bits given
     a 2016-block time differential and the previous bits'''
+    # if the time differential is greater than 8 weeks, set to 8 weeks
     if time_differential > TWO_WEEKS * 4:
         time_differential = TWO_WEEKS * 4
+    # if the time differential is less than half a week, set to half a week
     if time_differential < TWO_WEEKS // 4:
         time_differential = TWO_WEEKS // 4
+    # the new target is the previous target * time differential / two weeks
     new_target = bits_to_target(previous_bits) * time_differential // TWO_WEEKS
+    # if the new target is bigger than MAX_TARGET, set to MAX_TARGET
     if new_target > MAX_TARGET:
         new_target = MAX_TARGET
+    # convert the new target to bits
     return target_to_bits(new_target)
 
 
 def merkle_parent(hash1, hash2):
     '''Takes the binary hashes and calculates the hash256'''
+    # return the hash256 of hash1 + hash2
     raise NotImplementedError
 
 
 def merkle_parent_level(hashes):
     '''Takes a list of binary hashes and returns a list that's half
     the length'''
+    # if the list has exactly 1 element raise an error
+    # if the list has an odd number of elements, duplicate the last one
+    # and put it at the end so it has an even number of elements
+    # initialize next level
+    # loop over every pair (use: for i in range(0, len(hashes), 2))
+        # get the merkle parent of the hashes at index i and i+1
+        # append parent to parent level
+    # return parent level
     raise NotImplementedError
 
 
 def merkle_root(hashes):
     '''Takes a list of binary hashes and returns the merkle root
     '''
+    # current level starts as hashes
+    # loop until there's exactly 1 element
+        # current level becomes the merkle parent level
+    # return the 1st item of the current level
     raise NotImplementedError
 
 
@@ -196,17 +214,15 @@ def bit_field_to_bytes(bit_field):
     return bytes(result)
 
 
+# tag::source1[]
 def bytes_to_bit_field(some_bytes):
     flag_bits = []
-    # iterate over each byte of flags
     for byte in some_bytes:
-        # iterate over each bit, right-to-left
         for _ in range(8):
-            # add the current bit (byte & 1)
             flag_bits.append(byte & 1)
-            # rightshift the byte 1
             byte >>= 1
     return flag_bits
+# end::source1[]
 
 
 class HelperTest(TestCase):

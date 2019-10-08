@@ -6,7 +6,7 @@ import hashlib
 SIGHASH_ALL = 1
 SIGHASH_NONE = 2
 SIGHASH_SINGLE = 3
-BASE58_ALPHABET = b'123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
 TWO_WEEKS = 60 * 60 * 24 * 14
 
 
@@ -34,29 +34,29 @@ def encode_base58(s):
             count += 1
         else:
             break
-    prefix = b'1' * count
-    # convert from binary to hex, then hex to integer
-    num = int(s.hex(), 16)
-    result = bytearray()
+    # convert to big endian integer
+    num = int.from_bytes(s, 'big')
+    prefix = '1' * count
+    result = ''
     while num > 0:
         num, mod = divmod(num, 58)
-        result.insert(0, BASE58_ALPHABET[mod])
-    return prefix + bytes(result)
+        result = BASE58_ALPHABET[mod] + result
+    return prefix + result
 
 
 def encode_base58_checksum(s):
-    return encode_base58(s + hash256(s)[:4]).decode('ascii')
+    return encode_base58(s + hash256(s)[:4])
 
 
 def decode_base58(s):
     num = 0
-    for c in s.encode('ascii'):
+    for c in s:
         num *= 58
         num += BASE58_ALPHABET.index(c)
     combined = num.to_bytes(25, byteorder='big')
     checksum = combined[-4:]
     if hash256(combined[:-4])[:4] != checksum:
-        raise ValueError('bad address: {} {}'.format(checksum, hash256(combined)[:4]))
+        raise ValueError('bad address: {} {}'.format(checksum, hash256(combined[:-4])[:4]))
     return combined[1:-4]
 
 
@@ -125,32 +125,37 @@ def h160_to_p2sh_address(h160, testnet=False):
 
 def bits_to_target(bits):
     '''Turns bits into a target (large 256-bit integer)'''
+    # last byte is exponent
+    # the first three bytes are the coefficient in little endian
+    # the formula is:
+    # coefficient * 256**(exponent-3)
     raise NotImplementedError
 
 
+# tag::source1[]
 def target_to_bits(target):
-    '''Turns a target integer back into bits, which is 4 bytes'''
+    '''Turns a target integer back into bits'''
     raw_bytes = target.to_bytes(32, 'big')
-    # get rid of leading 0's
-    raw_bytes = raw_bytes.lstrip(b'\x00')
-    if raw_bytes[0] > 0x7f:
-        # if the first bit is 1, we have to start with 00
+    raw_bytes = raw_bytes.lstrip(b'\x00')  # <1>
+    if raw_bytes[0] > 0x7f:  # <2>
         exponent = len(raw_bytes) + 1
         coefficient = b'\x00' + raw_bytes[:2]
     else:
-        # otherwise, we can show the first 3 bytes
-        # exponent is the number of digits in base-256
-        exponent = len(raw_bytes)
-        # coefficient is the first 3 digits of the base-256 number
-        coefficient = raw_bytes[:3]
-    new_bits_big_endian = bytes([exponent]) + coefficient
-    # we've truncated the number after the first 3 digits of base-256
-    return new_bits_big_endian[::-1]
+        exponent = len(raw_bytes)  # <3>
+        coefficient = raw_bytes[:3]  # <4>
+    new_bits = coefficient[::-1] + bytes([exponent])  # <5>
+    return new_bits
+# end::source1[]
 
 
 def calculate_new_bits(previous_bits, time_differential):
     '''Calculates the new bits given
     a 2016-block time differential and the previous bits'''
+    # if the time differential is greater than 8 weeks, set to 8 weeks
+    # if the time differential is less than half a week, set to half a week
+    # the new target is the previous target * time differential / two weeks
+    # if the new target is bigger than MAX_TARGET, set to MAX_TARGET
+    # convert the new target to bits
     raise NotImplementedError
 
 

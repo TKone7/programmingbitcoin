@@ -14,37 +14,39 @@ from helper import (
 from script import Script
 
 
+# tag::source7[]
 class TxFetcher:
     cache = {}
 
     @classmethod
     def get_url(cls, testnet=False):
         if testnet:
-            return 'http://tbtc.programmingblockchain.com:18332'
+            return 'http://testnet.programmingbitcoin.com'
         else:
-            return 'http://btc.programmingblockchain.com:8332'
+            return 'http://mainnet.programmingbitcoin.com'
 
     @classmethod
     def fetch(cls, tx_id, testnet=False, fresh=False):
         if fresh or (tx_id not in cls.cache):
-            url = '{}/rest/tx/{}.hex'.format(cls.get_url(testnet), tx_id)
+            url = '{}/tx/{}.hex'.format(cls.get_url(testnet), tx_id)
             response = requests.get(url)
             try:
                 raw = bytes.fromhex(response.text.strip())
             except ValueError:
                 raise ValueError('unexpected response: {}'.format(response.text))
-            # make sure the tx we got matches to the hash we requested
             if raw[4] == 0:
                 raw = raw[:4] + raw[6:]
                 tx = Tx.parse(BytesIO(raw), testnet=testnet)
                 tx.locktime = little_endian_to_int(raw[-4:])
             else:
                 tx = Tx.parse(BytesIO(raw), testnet=testnet)
-            if tx.id() != tx_id:
-                raise ValueError('not the same id: {} vs {}'.format(tx.id(), tx_id))
+            if tx.id() != tx_id:  # <1>
+                raise ValueError('not the same id: {} vs {}'.format(tx.id(), 
+                                  tx_id))
             cls.cache[tx_id] = tx
         cls.cache[tx_id].testnet = testnet
         return cls.cache[tx_id]
+    # end::source7[]
 
     @classmethod
     def load_cache(cls, filename):
@@ -67,14 +69,15 @@ class TxFetcher:
             f.write(s)
 
 
+# tag::source1[]
 class Tx:
 
     def __init__(self, version, tx_ins, tx_outs, locktime, testnet=False):
         self.version = version
-        self.tx_ins = tx_ins
+        self.tx_ins = tx_ins  # <1>
         self.tx_outs = tx_outs
         self.locktime = locktime
-        self.testnet = testnet
+        self.testnet = testnet  # <2>
 
     def __repr__(self):
         tx_ins = ''
@@ -83,7 +86,7 @@ class Tx:
         tx_outs = ''
         for tx_out in self.tx_outs:
             tx_outs += tx_out.__repr__() + '\n'
-        return 'tx: {}\nversion: {}\ntx_ins:\n{}\ntx_outs:\n{}\nlocktime: {}\n'.format(
+        return 'tx: {}\nversion: {}\ntx_ins:\n{}tx_outs:\n{}locktime: {}'.format(
             self.id(),
             self.version,
             tx_ins,
@@ -91,52 +94,59 @@ class Tx:
             self.locktime,
         )
 
-    def id(self):
+    def id(self):  # <3>
         '''Human-readable hexadecimal of the transaction hash'''
         return self.hash().hex()
 
-    def hash(self):
+    def hash(self):  # <4>
         '''Binary hash of the legacy serialization'''
         return hash256(self.serialize())[::-1]
+    # end::source1[]
 
     @classmethod
     def parse(cls, s, testnet=False):
         '''Takes a byte stream and parses the transaction at the start
         return a Tx object
         '''
+        # s.read(n) will return n bytes
+        # version is an integer in 4 bytes, little-endian
+        # num_inputs is a varint, use read_varint(s)
+        # parse num_inputs number of TxIns
+        # num_outputs is a varint, use read_varint(s)
+        # parse num_outputs number of TxOuts
+        # locktime is an integer in 4 bytes, little-endian
+        # return an instance of the class (see __init__ for args)
         raise NotImplementedError
 
+    # tag::source6[]
     def serialize(self):
         '''Returns the byte serialization of the transaction'''
-        # serialize version (4 bytes, little endian)
         result = int_to_little_endian(self.version, 4)
-        # encode_varint on the number of inputs
         result += encode_varint(len(self.tx_ins))
-        # iterate inputs
         for tx_in in self.tx_ins:
-            # serialize each input
             result += tx_in.serialize()
-        # encode_varint on the number of outputs
         result += encode_varint(len(self.tx_outs))
-        # iterate outputs
         for tx_out in self.tx_outs:
-            # serialize each output
             result += tx_out.serialize()
-        # serialize locktime (4 bytes, little endian)
         result += int_to_little_endian(self.locktime, 4)
         return result
+    # end::source6[]
 
     def fee(self):
         '''Returns the fee of this transaction in satoshi'''
         # initialize input sum and output sum
+        # use TxIn.value() to sum up the input amounts
+        # use TxOut.amount to sum up the output amounts
+        # fee is input sum - output sum
         raise NotImplementedError
 
 
+# tag::source2[]
 class TxIn:
     def __init__(self, prev_tx, prev_index, script_sig=None, sequence=0xffffffff):
         self.prev_tx = prev_tx
         self.prev_index = prev_index
-        if script_sig is None:
+        if script_sig is None:  # <1>
             self.script_sig = Script()
         else:
             self.script_sig = script_sig
@@ -147,50 +157,51 @@ class TxIn:
             self.prev_tx.hex(),
             self.prev_index,
         )
+    # end::source2[]
 
     @classmethod
     def parse(cls, s):
         '''Takes a byte stream and parses the tx_input at the start
         return a TxIn object
         '''
+        # prev_tx is 32 bytes, little endian
+        # prev_index is an integer in 4 bytes, little endian
+        # use Script.parse to get the ScriptSig
+        # sequence is an integer in 4 bytes, little-endian
+        # return an instance of the class (see __init__ for args)
         raise NotImplementedError
 
+    # tag::source5[]
     def serialize(self):
         '''Returns the byte serialization of the transaction input'''
-        # serialize prev_tx, little endian
         result = self.prev_tx[::-1]
-        # serialize prev_index, 4 bytes, little endian
         result += int_to_little_endian(self.prev_index, 4)
-        # serialize the script_sig
         result += self.script_sig.serialize()
-        # serialize sequence, 4 bytes, little endian
         result += int_to_little_endian(self.sequence, 4)
         return result
+    # end::source5[]
 
+    # tag::source8[]
     def fetch_tx(self, testnet=False):
         return TxFetcher.fetch(self.prev_tx.hex(), testnet=testnet)
 
     def value(self, testnet=False):
-        '''Get the outpoint value by looking up the tx hash
-        Returns the amount in satoshi
+        '''Get the output value by looking up the tx hash.
+        Returns the amount in satoshi.
         '''
-        # use self.fetch_tx to get the transaction
         tx = self.fetch_tx(testnet=testnet)
-        # get the output at self.prev_index
-        # return the amount property
         return tx.tx_outs[self.prev_index].amount
 
     def script_pubkey(self, testnet=False):
-        '''Get the scriptPubKey by looking up the tx hash
-        Returns a Script object
+        '''Get the ScriptPubKey by looking up the tx hash.
+        Returns a Script object.
         '''
-        # use self.fetch_tx to get the transaction
         tx = self.fetch_tx(testnet=testnet)
-        # get the output at self.prev_index
-        # return the script_pubkey property
         return tx.tx_outs[self.prev_index].script_pubkey
+    # end::source8[]
 
 
+# tag::source3[]
 class TxOut:
 
     def __init__(self, amount, script_pubkey):
@@ -199,21 +210,25 @@ class TxOut:
 
     def __repr__(self):
         return '{}:{}'.format(self.amount, self.script_pubkey)
+    # end::source3[]
 
     @classmethod
     def parse(cls, s):
         '''Takes a byte stream and parses the tx_output at the start
         return a TxOut object
         '''
+        # amount is an integer in 8 bytes, little endian
+        # use Script.parse to get the ScriptPubKey
+        # return an instance of the class (see __init__ for args)
         raise NotImplementedError
 
-    def serialize(self):
+    # tag::source4[]
+    def serialize(self):  # <1>
         '''Returns the byte serialization of the transaction output'''
-        # serialize amount, 8 bytes, little endian
         result = int_to_little_endian(self.amount, 8)
-        # serialize the script_pubkey
         result += self.script_pubkey.serialize()
         return result
+    # end::source4[]
 
 
 class TxTest(TestCase):

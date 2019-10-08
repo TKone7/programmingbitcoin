@@ -163,6 +163,9 @@ class Point:
     def __repr__(self):
         if self.x is None:
             return 'Point(infinity)'
+        elif isinstance(self.x, FieldElement):
+            return 'Point({},{})_{}_{} FieldElement({})'.format(
+                self.x.num, self.y.num, self.a.num, self.b.num, self.x.prime)
         else:
             return 'Point({},{})_{}_{}'.format(self.x, self.y, self.a, self.b)
 
@@ -181,33 +184,34 @@ class Point:
         if self.x == other.x and self.y != other.y:
             return self.__class__(None, None, self.a, self.b)
 
-        # Case 2: self.x != other.x
+        # Case 2: self.x ≠ other.x
+        # Formula (x3,y3)==(x1,y1)+(x2,y2)
+        # s=(y2-y1)/(x2-x1)
+        # x3=s**2-x1-x2
+        # y3=s*(x1-x3)-y1
         if self.x != other.x:
-            # Formula (x3,y3)==(x1,y1)+(x2,y2)
-            # s=(y2-y1)/(x2-x1)
             s = (other.y - self.y) / (other.x - self.x)
-            # x3=s**2-x1-x2
             x = s**2 - self.x - other.x
-            # y3=s*(x1-x3)-y1
             y = s * (self.x - x) - self.y
             return self.__class__(x, y, self.a, self.b)
 
-        # Case 3: self.x == other.x, self.y == other.y
+        # Case 4: if we are tangent to the vertical line,
+        # we return the point at infinity
+        # note instead of figuring out what 0 is for each type
+        # we just use 0 * self.x
+        if self == other and self.y == 0 * self.x:
+            return self.__class__(None, None, self.a, self.b)
+
+        # Case 3: self == other
+        # Formula (x3,y3)=(x1,y1)+(x1,y1)
+        # s=(3*x1**2+a)/(2*y1)
+        # x3=s**2-2*x1
+        # y3=s*(x1-x3)-y1
         if self == other:
-            # Case 4: if we are tangent to the vertical line
-            # note instead of figuring out what 0 is for each type
-            # we just use 0 * self.x
-            if self.y == 0 * self.x:
-                return self.__class__(None, None, self.a, self.b)
-            else:
-                # Formula (x3,y3)=(x1,y1)+(x1,y1)
-                # s=(3*x1**2+a)/(2*y1)
-                s = (3 * self.x**2 + self.a) / (2 * self.y)
-                # x3=s**2-2*x1
-                x = s**2 - 2 * self.x
-                # y3=s*(x1-x3)-y1
-                y = s * (self.x - x) - self.y
-                return self.__class__(x, y, self.a, self.b)
+            s = (3 * self.x**2 + self.a) / (2 * self.y)
+            x = s**2 - 2 * self.x
+            y = s * (self.x - x) - self.y
+            return self.__class__(x, y, self.a, self.b)
 
     def __rmul__(self, coefficient):
         coef = coefficient
@@ -353,7 +357,7 @@ class ECCTest(TestCase):
 A = 0
 B = 7
 P = 2**256 - 2**32 - 977
-N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141
 
 
 class S256Field(FieldElement):
@@ -381,7 +385,7 @@ class S256Point(Point):
         if self.x is None:
             return 'S256Point(infinity)'
         else:
-            return 'S256Point({},{})'.format(self.x, self.y)
+            return 'S256Point({}, {})'.format(self.x, self.y)
 
     def __rmul__(self, coefficient):
         coef = coefficient % N
@@ -399,7 +403,7 @@ class S256Point(Point):
         return total.x.num == sig.r
 
     def sec(self, compressed=True):
-        # returns the binary version of the sec format, NOT hex
+        '''returns the binary version of the SEC format'''
         # if compressed, starts with b'\x02' if self.y.num is even, b'\x03' if self.y is odd
         # then self.x.num
         # remember, you have to convert self.x.num/self.y.num to binary (some_integer.to_bytes(32, 'big'))
@@ -410,7 +414,8 @@ class S256Point(Point):
                 return b'\x03' + self.x.num.to_bytes(32, 'big')
         else:
             # if non-compressed, starts with b'\x04' followod by self.x and then self.y
-            return b'\x04' + self.x.num.to_bytes(32, 'big') + self.y.num.to_bytes(32, 'big')
+            return b'\x04' + self.x.num.to_bytes(32, 'big') + \
+                self.y.num.to_bytes(32, 'big')
 
     def hash160(self, compressed=True):
         return hash160(self.sec(compressed))
@@ -426,8 +431,7 @@ class S256Point(Point):
 
     @classmethod
     def parse(self, sec_bin):
-        '''returns a Point object from a compressed sec binary (not hex)
-        '''
+        '''returns a Point object from a SEC binary (not hex)'''
         if sec_bin[0] == 4:
             x = int.from_bytes(sec_bin[1:33], 'big')
             y = int.from_bytes(sec_bin[33:65], 'big')
@@ -667,7 +671,7 @@ class PrivateKey:
 class PrivateKeyTest(TestCase):
 
     def test_sign(self):
-        pk = PrivateKey(randint(0, 2**256))
+        pk = PrivateKey(randint(0, N))
         z = randint(0, 2**256)
         sig = pk.sign(z)
         self.assertTrue(pk.point.verify(z, sig))

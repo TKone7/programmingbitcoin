@@ -20,14 +20,14 @@ class TxFetcher:
     @classmethod
     def get_url(cls, testnet=False):
         if testnet:
-            return 'http://tbtc.programmingblockchain.com:18332'
+            return 'http://testnet.programmingbitcoin.com'
         else:
-            return 'http://btc.programmingblockchain.com:8332'
+            return 'http://mainnet.programmingbitcoin.com'
 
     @classmethod
     def fetch(cls, tx_id, testnet=False, fresh=False):
         if fresh or (tx_id not in cls.cache):
-            url = '{}/rest/tx/{}.hex'.format(cls.get_url(testnet), tx_id)
+            url = '{}/tx/{}.hex'.format(cls.get_url(testnet), tx_id)
             response = requests.get(url)
             try:
                 raw = bytes.fromhex(response.text.strip())
@@ -83,7 +83,7 @@ class Tx:
         tx_outs = ''
         for tx_out in self.tx_outs:
             tx_outs += tx_out.__repr__() + '\n'
-        return 'tx: {}\nversion: {}\ntx_ins:\n{}\ntx_outs:\n{}\nlocktime: {}\n'.format(
+        return 'tx: {}\nversion: {}\ntx_ins:\n{}tx_outs:\n{}locktime: {}'.format(
             self.id(),
             self.version,
             tx_ins,
@@ -105,23 +105,23 @@ class Tx:
         return a Tx object
         '''
         # s.read(n) will return n bytes
-        # version has 4 bytes, little-endian, interpret as int
+        # version is an integer in 4 bytes, little-endian
         version = little_endian_to_int(s.read(4))
         # num_inputs is a varint, use read_varint(s)
         num_inputs = read_varint(s)
-        # each input needs parsing
+        # parse num_inputs number of TxIns
         inputs = []
         for _ in range(num_inputs):
             inputs.append(TxIn.parse(s))
         # num_outputs is a varint, use read_varint(s)
         num_outputs = read_varint(s)
-        # each output needs parsing
+        # parse num_outputs number of TxOuts
         outputs = []
         for _ in range(num_outputs):
             outputs.append(TxOut.parse(s))
-        # locktime is 4 bytes, little-endian
+        # locktime is an integer in 4 bytes, little-endian
         locktime = little_endian_to_int(s.read(4))
-        # return an instance of the class (cls(...))
+        # return an instance of the class (see __init__ for args)
         return cls(version, inputs, outputs, locktime, testnet=testnet)
 
     def serialize(self):
@@ -148,15 +148,13 @@ class Tx:
         '''Returns the fee of this transaction in satoshi'''
         # initialize input sum and output sum
         input_sum, output_sum = 0, 0
-        # iterate through inputs
+        # use TxIn.value() to sum up the input amounts
         for tx_in in self.tx_ins:
-            # for each input get the value and add to input sum
             input_sum += tx_in.value(self.testnet)
-        # iterate through outputs
+        # use TxOut.amount to sum up the output amounts
         for tx_out in self.tx_outs:
-            # for each output get the amount and add to output sum
             output_sum += tx_out.amount
-        # return input sum - output sum
+        # fee is input sum - output sum
         return input_sum - output_sum
 
 
@@ -182,17 +180,15 @@ class TxIn:
         '''Takes a byte stream and parses the tx_input at the start
         return a TxIn object
         '''
-        # s.read(n) will return n bytes
         # prev_tx is 32 bytes, little endian
         prev_tx = s.read(32)[::-1]
-        # prev_index is 4 bytes, little endian, interpret as int
+        # prev_index is an integer in 4 bytes, little endian
         prev_index = little_endian_to_int(s.read(4))
-        # script_sig is a variable field (length followed by the data)
-        # you can use Script.parse to get the actual script
+        # use Script.parse to get the ScriptSig
         script_sig = Script.parse(s)
-        # sequence is 4 bytes, little-endian, interpret as int
+        # sequence is an integer in 4 bytes, little-endian
         sequence = little_endian_to_int(s.read(4))
-        # return an instance of the class (cls(...))
+        # return an instance of the class (see __init__ for args)
         return cls(prev_tx, prev_index, script_sig, sequence)
 
     def serialize(self):
@@ -221,7 +217,7 @@ class TxIn:
         return tx.tx_outs[self.prev_index].amount
 
     def script_pubkey(self, testnet=False):
-        '''Get the scriptPubKey by looking up the tx hash
+        '''Get the ScriptPubKey by looking up the tx hash
         Returns a Script object
         '''
         # use self.fetch_tx to get the transaction
@@ -245,13 +241,11 @@ class TxOut:
         '''Takes a byte stream and parses the tx_output at the start
         return a TxOut object
         '''
-        # s.read(n) will return n bytes
-        # amount is 8 bytes, little endian, interpret as int
+        # amount is an integer in 8 bytes, little endian
         amount = little_endian_to_int(s.read(8))
-        # script_pubkey is a variable field (length followed by the data)
-        # you can use Script.parse to get the actual script
+        # use Script.parse to get the ScriptPubKey
         script_pubkey = Script.parse(s)
-        # return an instance of the class (cls(...))
+        # return an instance of the class (see __init__ for args)
         return cls(amount, script_pubkey)
 
     def serialize(self):
